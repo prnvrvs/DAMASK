@@ -340,6 +340,7 @@ module function dislotungsten_dotState(Mp,ph,en) result(dotState)
     d_hat
   real(pREAL) :: &
     mu, nu, T
+  integer :: i
 
 
   associate(prm => param(ph), stt => state(ph), dst => dependentState(ph), &
@@ -356,37 +357,39 @@ module function dislotungsten_dotState(Mp,ph,en) result(dotState)
 
     gamma_dot = abs(gamma_dot)
 
-    where(dEq0(gamma_dot))
-      d_hat = dst%Lambda_sl(:,en)                                                                   ! upper limit
-      rho_dot_dip_formation = 0.0_pREAL
-    else where
-      d_hat = mu*prm%b_sl/(8.0_pREAL*PI*(1.0_pREAL-nu)*tau_eff)
-      d_hat = math_clip(d_hat, right = dst%Lambda_sl(:,en))                                         ! upper limit
-      d_hat = math_clip(d_hat, left  = prm%d_caron)                                                 ! lower limit
+    do i = 1, prm%sum_N_sl
+      if (gamma_dot(i) <= tol_math_check .or. tau_eff(i) <= tol_math_check) then
+        d_hat(i) = dst%Lambda_sl(i,en)
+        rho_dot_dip_formation(i) = 0.0_pREAL
+      else
+        d_hat(i) = mu*prm%b_sl(i)/(8.0_pREAL*PI*(1.0_pREAL-nu)*tau_eff(i))
+        d_hat(i) = min(dst%Lambda_sl(i,en), max(prm%d_caron(i), d_hat(i)))
+        if (prm%dipoleformation) then
+          rho_dot_dip_formation(i) = gamma_dot(i) * 2.0_pREAL*(d_hat(i)-prm%d_caron(i))/prm%b_sl(i) &
+                                   * max(0.0_pREAL,stt%rho_mob(i,en))
+        else
+          rho_dot_dip_formation(i) = 0.0_pREAL
+        end if
+      end if
 
-      rho_dot_dip_formation = merge(gamma_dot * 2.0_pREAL*(d_hat-prm%d_caron)/prm%b_sl * stt%rho_mob(:,en), &
-                                    0.0_pREAL, &
-                                    prm%dipoleformation)
-    end where
+      if (prm%D_0 > 0.0_pREAL .and. (d_hat(i) - prm%d_caron(i)) > tol_math_check) then
+        v_cl(i) = (3.0_pREAL*mu*prm%D_0*exp(-prm%Q_cl/(K_B*T))*prm%f_at(i)/(2.0_pREAL*PI*K_B*T)) &
+                * (1.0_pREAL/(d_hat(i)+prm%d_caron(i)))
+        rho_dot_dip_climb(i) = (4.0_pREAL*v_cl(i)*max(0.0_pREAL,stt%rho_dip(i,en))) &
+                             / (d_hat(i)-prm%d_caron(i))
+      else
+        rho_dot_dip_climb(i) = 0.0_pREAL
+      end if
 
-    if (prm%D_0 > 0.0_pREAL) then
-      where(d_hat - prm%d_caron <= tol_math_check)
-        rho_dot_dip_climb = 0.0_pREAL
-      else where
-        v_cl = (3.0_pREAL*mu*prm%D_0*exp(-prm%Q_cl/(K_B*T))*prm%f_at/(2.0_pREAL*PI*K_B*T)) &
-             * (1.0_pREAL/(d_hat+prm%d_caron))
-        rho_dot_dip_climb = (4.0_pREAL*v_cl*stt%rho_dip(:,en))/(d_hat-prm%d_caron)                    ! ToDo: Discuss with Franz: Stress dependency?
-      end where
-    else
-      rho_dot_dip_climb = 0.0_pREAL
-    end if
-
-    rho_dot_mob = gamma_dot / (prm%b_sl*dst%Lambda_sl(:,en)) &                                      ! multiplication
-                - rho_dot_dip_formation &
-                - gamma_dot * 2.0_pREAL*prm%d_caron/prm%b_sl * stt%rho_mob(:,en)                    ! spontaneous annihilation of 2 edges
-    rho_dot_dip = rho_dot_dip_formation &
-                - rho_dot_dip_climb &
-                - gamma_dot * 2.0_pREAL*prm%d_caron/prm%b_sl * stt%rho_dip(:,en)                    ! spontaneous annihilation of an edge with a dipole
+      rho_dot_mob(i) = gamma_dot(i) / (prm%b_sl(i)*dst%Lambda_sl(i,en)) &
+                     - rho_dot_dip_formation(i) &
+                     - gamma_dot(i) * 2.0_pREAL*prm%d_caron(i)/prm%b_sl(i) &
+                     * max(0.0_pREAL,stt%rho_mob(i,en))
+      rho_dot_dip(i) = rho_dot_dip_formation(i) &
+                     - rho_dot_dip_climb(i) &
+                     - gamma_dot(i) * 2.0_pREAL*prm%d_caron(i)/prm%b_sl(i) &
+                     * max(0.0_pREAL,stt%rho_dip(i,en))
+    end do
 
   end associate
 
@@ -488,66 +491,72 @@ pure subroutine kinetics(Mp,T,ph,en, &
   real(pREAL), dimension(param(ph)%sum_N_sl), optional, intent(out) :: &
     dgamma_dot_dtau, &
     tau
-
   real(pREAL), dimension(param(ph)%sum_N_sl) :: &
-    StressRatio, &
-    StressRatio_p,StressRatio_pminus1, &
-    deltaH_factor, &
     effectiveLength, &
-    tau_pos, tau_neg, tau_eff, &
-    t_n,t_k, dtk,dtn
+    tau_pos, tau_neg, tau_eff
+  real(pREAL) :: &
+    StressRatio_i, StressRatio_p_i, StressRatio_pm1_i, &
+    deltaH_factor_i, deltaH_pow_i, &
+    BoltzmannRatio_i, b_rho_i, &
+    t_n_i, t_k_i, dtn_i, dtk_i
   integer :: i
 
 
   associate(prm => param(ph), stt => state(ph), dst => dependentState(ph))
 
-    tau_pos = [(math_tensordot(Mp,prm%P_nS_pos(1:3,1:3,i)),i=1,prm%sum_N_sl)]
-    tau_neg = [(math_tensordot(Mp,prm%P_nS_neg(1:3,1:3,i)),i=1,prm%sum_N_sl)]
-    tau_eff = math_clip(max(tau_pos,tau_neg) - dst%tau_pass(:,en),left = 0.0_pREAL)
+    do i = 1, prm%sum_N_sl
+      tau_pos(i) = math_tensordot(Mp, prm%P_nS_pos(1:3,1:3,i))
+      tau_neg(i) = math_tensordot(Mp, prm%P_nS_neg(1:3,1:3,i))
+      tau_eff(i) = max(0.0_pREAL, max(tau_pos(i), tau_neg(i)) - dst%tau_pass(i,en))
+    end do
 
     if (present(tau)) tau = tau_eff
 
     effectiveLength = math_clip(dst%Lambda_sl(:,en) - prm%w, left = prm%b_sl)
 
-    associate(BoltzmannRatio  => prm%Q_s/(K_B*T), &
-              b_rho           => stt%rho_mob(:,en) * prm%b_sl)
+    gamma_dot = 0.0_pREAL
+    if (present(dgamma_dot_dtau)) dgamma_dot_dtau = 0.0_pREAL
 
-      StressRatio = 0.0_pREAL
-      StressRatio_p = 0.0_pREAL
-      StressRatio_pminus1 = 0.0_pREAL
-      deltaH_factor = 0.0_pREAL
-      t_n = 0.0_pREAL
-      t_k = 0.0_pREAL
-      dot_gamma = 0.0_pREAL
+    do i = 1, prm%sum_N_sl
+      if (tau_eff(i) > tol_math_check) then
+        BoltzmannRatio_i = prm%Q_s(i)/(K_B*T)
+        b_rho_i = max(0.0_pREAL, stt%rho_mob(i,en)) * prm%b_sl(i)
 
-      where(tau_eff > tol_math_check)
-        StressRatio = tau_eff/prm%tau_Peierls
-        StressRatio_p       = StressRatio** prm%p
-        StressRatio_pminus1 = StressRatio**(prm%p-1.0_pREAL)
-        deltaH_factor       = math_clip(1.0_pREAL - StressRatio_p, left = 0.0_pREAL)
+        StressRatio_i = tau_eff(i)/prm%tau_Peierls(i)
+        StressRatio_p_i = StressRatio_i ** prm%p(i)
+        deltaH_factor_i = max(0.0_pREAL, 1.0_pREAL - StressRatio_p_i)
 
-        t_n = prm%b_sl*exp(BoltzmannRatio*deltaH_factor ** prm%q) &
-            / (prm%omega*effectiveLength)
-        t_k = effectiveLength * prm%B /(2.0_pREAL*prm%b_sl*tau_eff)                                 ! corrected eq. (14)
+        t_n_i = prm%b_sl(i)*exp(BoltzmannRatio_i * (deltaH_factor_i ** prm%q(i))) &
+              / (prm%omega(i)*effectiveLength(i))
+        t_k_i = effectiveLength(i) * prm%B(i) /(2.0_pREAL*prm%b_sl(i)*tau_eff(i))
 
-        gamma_dot = b_rho * prm%h/(t_n + t_k) * merge(+1.0_pREAL,-1.0_pREAL, tau_pos>tau_neg)
-      end where
+        if (tau_pos(i) > tau_neg(i)) then
+          gamma_dot(i) = b_rho_i * prm%h(i)/(t_n_i + t_k_i)
+        else
+          gamma_dot(i) = -b_rho_i * prm%h(i)/(t_n_i + t_k_i)
+        end if
 
-      if (present(dgamma_dot_dtau)) then
-        dtn = 0.0_pREAL
-        dtk = 0.0_pREAL
-        dgamma_dot_dtau = 0.0_pREAL
-        where(tau_eff > tol_math_check .and. StressRatio_p < 1.0_pREAL)
-          dtn = -1.0_pREAL * t_n * BoltzmannRatio * prm%p * prm%q * deltaH_factor**(prm%q - 1.0_pREAL) &
-              * StressRatio_pminus1 / prm%tau_Peierls
-        end where
-        where(tau_eff > tol_math_check)
-          dtk = -1.0_pREAL * t_k / tau_eff
-          dgamma_dot_dtau = -1.0_pREAL * gamma_dot * (dtn + dtk) / (t_n + t_k)
-        end where
+        if (present(dgamma_dot_dtau)) then
+          if (StressRatio_p_i < 1.0_pREAL) then
+            StressRatio_pm1_i = StressRatio_i**(prm%p(i)-1.0_pREAL)
+            if (deltaH_factor_i > 0.0_pREAL .and. prm%q(i) > 1.0_pREAL) then
+              deltaH_pow_i = deltaH_factor_i**(prm%q(i) - 1.0_pREAL)
+            else if (deltaH_factor_i > 0.0_pREAL) then
+              deltaH_pow_i = 1.0_pREAL
+            else
+              deltaH_pow_i = 0.0_pREAL
+            end if
+            dtn_i = -1.0_pREAL * t_n_i * BoltzmannRatio_i * prm%p(i) * prm%q(i) * deltaH_pow_i &
+                  * StressRatio_pm1_i / prm%tau_Peierls(i)
+          else
+            dtn_i = 0.0_pREAL
+          end if
+          dtk_i = -1.0_pREAL * t_k_i / tau_eff(i)
+          dgamma_dot_dtau(i) = -1.0_pREAL * gamma_dot(i) * (dtn_i + dtk_i) / (t_n_i + t_k_i)
+        end if
       end if
+    end do
 
-    end associate
   end associate
 
 end subroutine kinetics
