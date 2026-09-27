@@ -25,6 +25,10 @@ h: [2.566e-10]
 h_sl-sl: [0.009, 0.72, 0.009, 0.05, 0.05, 0.06, 0.09]
 w: [2.992e-9] # 11b
 
+# Non-Schmid formulation selection:
+# 'G' = Gröger et al. (2008) [default, up to 6 coefficients]
+# 'K' = Kumar et al. (2023)  [5 coefficients: c1..c5]
+non-Schmid_model: G
 # values in Cereceda et al. are high, using parameters from Gröger et al.
 a_non-Schmid: [[0.0, 0.56, 0.75]] # Tab. 2
 

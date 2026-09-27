@@ -1,0 +1,41 @@
+type: dislotungsten
+
+references:
+  - D. Cereceda et al.,
+    International Journal of Plasticity 78:242-265, 2016,
+    https://doi.org/10.1016/j.ijplas.2015.09.002
+  - P. Kumar et al.,
+    Journal of the Mechanics and Physics of Solids 173:105235, 2023,
+    https://doi.org/10.1016/j.jmps.2023.105235
+
+output: [rho_mob, rho_dip, gamma_sl, Lambda_sl, tau_pass]
+
+N_sl: [12]
+
+b_sl: [2.72e-10]
+rho_mob_0: [1.0e+10]
+rho_dip_0: [1.0]
+Q_s: [2.61154e-19]   # 1.63 eV
+B: [8.3e-5]
+omega: [9.1e+11]
+p_sl: [0.7672]
+q_sl: [1.3462]
+tau_Peierls: [1.69e+9]
+h: [2.61154e-10]
+h_sl-sl: [0.009, 0.72, 0.009, 0.05, 0.05, 0.06, 0.09]
+w: [2.992e-9]
+
+# Non-Schmid formulation selection:
+# 'G' = Gröger et al. (2008) [default, up to 6 coefficients: a1..a6]
+# 'K' = Kumar et al. (2023)  [5 coefficients: c1, c2, c3, c4, c5]
+# Eq. 4: P_ns = c1*(t⊗b) + c2*(t⊗n) + c3*(n⊗n) + c4*(t⊗t) + c5*(b⊗b)
+non-Schmid_model: K
+a_non-Schmid: [[0.92, -0.185, 0.65, -0.65, -0.00]]
+
+i_sl: [1]
+D: 1.0e+20
+D_a: 1.0
+
+D_0: 0.0
+f_at: 1
+Q_cl: 1.0

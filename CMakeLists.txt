@@ -202,7 +202,27 @@ set(CMAKE_Fortran_FLAGS_${CMAKE_BUILD_TYPE} "${CMAKE_Fortran_FLAGS_${CMAKE_BUILD
 set(CMAKE_C_FLAGS_${CMAKE_BUILD_TYPE}       "${CMAKE_C_FLAGS_${CMAKE_BUILD_TYPE}}       ${PETSC_INCLUDES} ${BUILDCMD_POST}")
 set(CMAKE_CXX_FLAGS_${CMAKE_BUILD_TYPE}     "${CMAKE_CXX_FLAGS_${CMAKE_BUILD_TYPE}}     ${PETSC_INCLUDES} ${BUILDCMD_POST}")
 
-set(CMAKE_Fortran_LINK_EXECUTABLE "${CMAKE_Fortran_LINK_EXECUTABLE} <LINK_FLAGS> <FLAGS> <OBJECTS> -o <TARGET> <LINK_LIBRARIES>")
+# Fortran ISO C binding header for C/C++ compilers
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/iso_fortran_include")
+execute_process(
+  COMMAND ${CMAKE_COMMAND} -E env MPICH_FC=gfortran ${CMAKE_Fortran_COMPILER} -print-file-name=include
+  OUTPUT_VARIABLE FORTRAN_INCLUDE_DIR
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+if(NOT EXISTS "${FORTRAN_INCLUDE_DIR}/ISO_Fortran_binding.h")
+  execute_process(
+    COMMAND gfortran -print-file-name=include
+    OUTPUT_VARIABLE FORTRAN_INCLUDE_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+endif()
+if(EXISTS "${FORTRAN_INCLUDE_DIR}/ISO_Fortran_binding.h")
+  file(CREATE_LINK "${FORTRAN_INCLUDE_DIR}/ISO_Fortran_binding.h" "${CMAKE_BINARY_DIR}/iso_fortran_include/ISO_Fortran_binding.h" SYMBOLIC COPY_ON_ERROR)
+  include_directories("${CMAKE_BINARY_DIR}/iso_fortran_include")
+  message(STATUS "Linked ISO_Fortran_binding.h into ${CMAKE_BINARY_DIR}/iso_fortran_include")
+endif()
+
+set(CMAKE_Fortran_LINK_EXECUTABLE "${CMAKE_Fortran_LINK_EXECUTABLE} <LINK_FLAGS> <FLAGS> <OBJECTS> -o <TARGET> <LINK_LIBRARIES> -L$ENV{PETSC_DIR}/lib -lhdf5hl_fortran -lhdf5_fortran")
 if(${GRID})
   set(CMAKE_Fortran_LINK_EXECUTABLE "${CMAKE_Fortran_LINK_EXECUTABLE} -lz")
 endif()

@@ -30,9 +30,13 @@ foreach(VARIANT GRID MESH TEST)
       endif()
       target_link_libraries(${executable_name} PRIVATE damask_c_${VARIANT_LOWER})
       target_link_directories(${executable_name} PRIVATE ${PETSC_LIBRARY_DIRS})
+      find_library(HDF5_FORTRAN_LIB hdf5_fortran HINTS "$ENV{PETSC_DIR}/lib")
+      find_library(HDF5_HL_FORTRAN_LIB hdf5hl_fortran HINTS "$ENV{PETSC_DIR}/lib")
       target_link_libraries(${executable_name} PRIVATE
         ${PETSC_LIBRARIES}
         ${PETSC_EXTERNAL_LIB}
+        ${HDF5_HL_FORTRAN_LIB}
+        ${HDF5_FORTRAN_LIB}
       )
 
       # Link with Fortran compiler requires to add C++ standard library

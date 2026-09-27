@@ -98,7 +98,8 @@ module function plastic_dislotungsten_init() result(myPlasticity)
     a_nS                                                                                            !< non-Schmid coefficients
   character(len=:), allocatable :: &
     refs, &
-    extmsg
+    extmsg, &
+    nonSchmid_model
   type(tDict), pointer :: &
     phases, &
     phase, &
@@ -155,8 +156,13 @@ module function plastic_dislotungsten_init() result(myPlasticity)
       prm%systems_sl = crystal_labels_slip(N_sl,phase_lattice(ph))
 
       a_nS = pl%get_as2dReal('a_non-Schmid',defaultVal=reshape(emptyRealArray,[0,0]))
-      prm%P_nS_pos = crystal_SchmidMatrix_slip(N_sl,phase_lattice(ph),phase_cOverA(ph),nonSchmidCoefficients=a_nS,sense=+1)
-      prm%P_nS_neg = crystal_SchmidMatrix_slip(N_sl,phase_lattice(ph),phase_cOverA(ph),nonSchmidCoefficients=a_nS,sense=-1)
+      nonSchmid_model = pl%get_asStr('non-Schmid_model', defaultVal='G')
+      prm%P_nS_pos = crystal_SchmidMatrix_slip(N_sl,phase_lattice(ph),phase_cOverA(ph), &
+                                               nonSchmidCoefficients=a_nS,sense=+1, &
+                                               nonSchmid_model=nonSchmid_model)
+      prm%P_nS_neg = crystal_SchmidMatrix_slip(N_sl,phase_lattice(ph),phase_cOverA(ph), &
+                                               nonSchmidCoefficients=a_nS,sense=-1, &
+                                               nonSchmid_model=nonSchmid_model)
 
       prm%h_sl_sl = crystal_interaction_SlipBySlip(N_sl,pl%get_as1dReal('h_sl-sl'), &
                                                    phase_lattice(ph))
@@ -363,13 +369,17 @@ module function dislotungsten_dotState(Mp,ph,en) result(dotState)
                                     prm%dipoleformation)
     end where
 
-    where(dEq0(d_hat-prm%d_caron))
+    if (prm%D_0 > 0.0_pREAL) then
+      where(d_hat - prm%d_caron <= tol_math_check)
+        rho_dot_dip_climb = 0.0_pREAL
+      else where
+        v_cl = (3.0_pREAL*mu*prm%D_0*exp(-prm%Q_cl/(K_B*T))*prm%f_at/(2.0_pREAL*PI*K_B*T)) &
+             * (1.0_pREAL/(d_hat+prm%d_caron))
+        rho_dot_dip_climb = (4.0_pREAL*v_cl*stt%rho_dip(:,en))/(d_hat-prm%d_caron)                    ! ToDo: Discuss with Franz: Stress dependency?
+      end where
+    else
       rho_dot_dip_climb = 0.0_pREAL
-    else where
-      v_cl = (3.0_pREAL*mu*prm%D_0*exp(-prm%Q_cl/(K_B*T))*prm%f_at/(2.0_pREAL*PI*K_B*T)) &
-           * (1.0_pREAL/(d_hat+prm%d_caron))
-      rho_dot_dip_climb = (4.0_pREAL*v_cl*stt%rho_dip(:,en))/(d_hat-prm%d_caron)                      ! ToDo: Discuss with Franz: Stress dependency?
-    end where
+    end if
 
     rho_dot_mob = gamma_dot / (prm%b_sl*dst%Lambda_sl(:,en)) &                                      ! multiplication
                 - rho_dot_dip_formation &
@@ -399,11 +409,15 @@ module subroutine dislotungsten_dependentState(ph,en)
   associate(prm => param(ph), stt => state(ph), dst => dependentState(ph))
 
     dst%tau_pass(:,en) = elastic_mu(ph,en,prm%isotropic_bound)*prm%b_sl &
-                       * sqrt(matmul(prm%h_sl_sl,stt%rho_mob(:,en)+stt%rho_dip(:,en)))
+                       * sqrt(math_clip(matmul(prm%h_sl_sl, &
+                              math_clip(stt%rho_mob(:,en),left=0.0_pREAL) + &
+                              math_clip(stt%rho_dip(:,en),left=0.0_pREAL)), left=0.0_pREAL))
 
     Lambda_sl_inv = 1.0_pREAL/prm%D &
-                  + sqrt(matmul(prm%forestProjection,stt%rho_mob(:,en)+stt%rho_dip(:,en)))/prm%i_sl
-    dst%Lambda_sl(:,en) = Lambda_sl_inv**(-1.0_pREAL)
+                  + sqrt(math_clip(matmul(prm%forestProjection, &
+                         math_clip(stt%rho_mob(:,en),left=0.0_pREAL) + &
+                         math_clip(stt%rho_dip(:,en),left=0.0_pREAL)), left=0.0_pREAL))/prm%i_sl
+    dst%Lambda_sl(:,en) = math_clip(Lambda_sl_inv**(-1.0_pREAL), left = prm%w + prm%b_sl)
 
   end associate
 
@@ -478,6 +492,8 @@ pure subroutine kinetics(Mp,T,ph,en, &
   real(pREAL), dimension(param(ph)%sum_N_sl) :: &
     StressRatio, &
     StressRatio_p,StressRatio_pminus1, &
+    deltaH_factor, &
+    effectiveLength, &
     tau_pos, tau_neg, tau_eff, &
     t_n,t_k, dtk,dtn
   integer :: i
@@ -491,34 +507,43 @@ pure subroutine kinetics(Mp,T,ph,en, &
 
     if (present(tau)) tau = tau_eff
 
-    associate(BoltzmannRatio  => prm%Q_s/(K_B*T), &
-              b_rho           => stt%rho_mob(:,en) * prm%b_sl, &
-              effectiveLength => dst%Lambda_sl(:,en) - prm%w)
+    effectiveLength = math_clip(dst%Lambda_sl(:,en) - prm%w, left = prm%b_sl)
 
+    associate(BoltzmannRatio  => prm%Q_s/(K_B*T), &
+              b_rho           => stt%rho_mob(:,en) * prm%b_sl)
+
+      StressRatio = 0.0_pREAL
+      StressRatio_p = 0.0_pREAL
+      StressRatio_pminus1 = 0.0_pREAL
+      deltaH_factor = 0.0_pREAL
+      t_n = 0.0_pREAL
+      t_k = 0.0_pREAL
+      dot_gamma = 0.0_pREAL
 
       where(tau_eff > tol_math_check)
         StressRatio = tau_eff/prm%tau_Peierls
         StressRatio_p       = StressRatio** prm%p
         StressRatio_pminus1 = StressRatio**(prm%p-1.0_pREAL)
+        deltaH_factor       = math_clip(1.0_pREAL - StressRatio_p, left = 0.0_pREAL)
 
-        t_n = prm%b_sl*exp(BoltzmannRatio*(1.0_pREAL-StressRatio_p) ** prm%q) &
+        t_n = prm%b_sl*exp(BoltzmannRatio*deltaH_factor ** prm%q) &
             / (prm%omega*effectiveLength)
         t_k = effectiveLength * prm%B /(2.0_pREAL*prm%b_sl*tau_eff)                                 ! corrected eq. (14)
 
         gamma_dot = b_rho * prm%h/(t_n + t_k) * merge(+1.0_pREAL,-1.0_pREAL, tau_pos>tau_neg)
-      else where
-        gamma_dot = 0.0_pREAL
       end where
 
       if (present(dgamma_dot_dtau)) then
-        where(tau_eff > tol_math_check)
-          dtn = -1.0_pREAL * t_n * BoltzmannRatio * prm%p * prm%q * (1.0_pREAL-StressRatio_p)**(prm%q - 1.0_pREAL) &
+        dtn = 0.0_pREAL
+        dtk = 0.0_pREAL
+        dgamma_dot_dtau = 0.0_pREAL
+        where(tau_eff > tol_math_check .and. StressRatio_p < 1.0_pREAL)
+          dtn = -1.0_pREAL * t_n * BoltzmannRatio * prm%p * prm%q * deltaH_factor**(prm%q - 1.0_pREAL) &
               * StressRatio_pminus1 / prm%tau_Peierls
+        end where
+        where(tau_eff > tol_math_check)
           dtk = -1.0_pREAL * t_k / tau_eff
-
           dgamma_dot_dtau = -1.0_pREAL * gamma_dot * (dtn + dtk) / (t_n + t_k)
-        else where
-          dgamma_dot_dtau = 0.0_pREAL
         end where
       end if
 

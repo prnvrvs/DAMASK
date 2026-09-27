@@ -1345,23 +1345,25 @@ end function crystal_interaction_TwinBySlip
 ! Non-Schmid projections for hcp with 1 coefficient
 ! https://doi.org/10.1016/j.scriptamat.2019.11.002
 !--------------------------------------------------------------------------------------------------
-function crystal_SchmidMatrix_slip(Nslip,lattice,cOverA,nonSchmidCoefficients,sense) result(SchmidMatrix)
+function crystal_SchmidMatrix_slip(Nslip,lattice,cOverA,nonSchmidCoefficients,sense,nonSchmid_model) result(SchmidMatrix)
 
   integer,     dimension(:),              intent(in) :: Nslip                                       !< number of active slip systems per family
   character(len=*),                       intent(in) :: lattice                                     !< Bravais lattice (Pearson symbol)
   real(pREAL),                            intent(in) :: cOverA
   real(pREAL), dimension(:,:), optional,  intent(in) :: nonSchmidCoefficients                       !< non-Schmid coefficients for projections, shape(N_families,N_coeff)
   integer,                     optional,  intent(in) :: sense                                       !< sense (-1,+1)
+  character(len=*),            optional,  intent(in) :: nonSchmid_model                             !< non-Schmid model ('G' for Groger [default], 'K' for Kumar)
   real(pREAL), dimension(3,3,sum(Nslip))             :: SchmidMatrix
 
   real(pREAL), dimension(3,3,sum(Nslip))             :: coordinateSystem
   real(pREAL), dimension(:,:),           allocatable :: slipSystems
   integer,     dimension(:),             allocatable :: NslipMax
   integer,     dimension(:),             allocatable :: family
-  real(pREAL), dimension(3)                          :: direction, normal, np
+  real(pREAL), dimension(3)                          :: direction, normal, np, t
   real(pREAL), dimension(6)                          :: coeff                                       !< local nonSchmid coefficient variable
   type(tRotation)                                    :: R
   integer                                            :: i
+  character(len=16)                                  :: model_ns
 
 
   select case(lattice)
@@ -1410,6 +1412,9 @@ function crystal_SchmidMatrix_slip(Nslip,lattice,cOverA,nonSchmidCoefficients,se
     coordinateSystem(1:3,1,1:sum(Nslip)) = coordinateSystem(1:3,1,1:sum(Nslip)) * real(sense,pREAL)
   end if
 
+  model_ns = 'G'
+  if (present(nonSchmid_model)) model_ns = trim(adjustl(nonSchmid_model))
+
   do i = 1,sum(Nslip)
     direction = coordinateSystem(1:3,1,i)
     normal    = coordinateSystem(1:3,2,i)
@@ -1428,16 +1433,31 @@ function crystal_SchmidMatrix_slip(Nslip,lattice,cOverA,nonSchmidCoefficients,se
         case ('cI')
           if (family(i) == 1) then ! <111>{110} systems
             coeff(:size(nonSchmidCoefficients,dim=2)) = nonSchmidCoefficients(family(i),:)
-            call R%fromAxisAngle([direction,60.0_pREAL],degrees=.true.,P=1)
-            np = R%rotate(normal)
-            SchmidMatrix(1:3,1:3,i) = SchmidMatrix(1:3,1:3,i) &
-                                    + coeff(1) * math_outer(direction, np) &
-                                    + coeff(2) * math_outer(math_cross(normal, direction), normal) &
-                                    + coeff(3) * math_outer(math_cross(np, direction), np) &
-                                    + coeff(4) * math_outer(normal, normal) &
-                                    + coeff(5) * math_outer(math_cross(normal, direction), &
-                                                            math_cross(normal, direction)) &
-                                    + coeff(6) * math_outer(direction, direction)
+            select case(model_ns(1:1))
+              case ('K','k')
+                t = math_cross(direction, normal)
+                ! Kumar et al. (2023), Eq. 4: P_ns = c1(t⊗b) + c2(t⊗n) + c3(n⊗n) + c4(t⊗t) + c5(b⊗b)
+                SchmidMatrix(1:3,1:3,i) = SchmidMatrix(1:3,1:3,i) &
+                                        + coeff(1) * math_outer(t, direction) &
+                                        + coeff(2) * math_outer(t, normal) &
+                                        + coeff(3) * math_outer(normal, normal) &
+                                        + coeff(4) * math_outer(t, t) &
+                                        + coeff(5) * math_outer(direction, direction)
+              case ('G','g')
+                call R%fromAxisAngle([direction,60.0_pREAL],degrees=.true.,P=1)
+                np = R%rotate(normal)
+                ! Gröger et al. (2008), Table 1
+                SchmidMatrix(1:3,1:3,i) = SchmidMatrix(1:3,1:3,i) &
+                                        + coeff(1) * math_outer(direction, np) &
+                                        + coeff(2) * math_outer(math_cross(normal, direction), normal) &
+                                        + coeff(3) * math_outer(math_cross(np, direction), np) &
+                                        + coeff(4) * math_outer(normal, normal) &
+                                        + coeff(5) * math_outer(math_cross(normal, direction), &
+                                                                math_cross(normal, direction)) &
+                                        + coeff(6) * math_outer(direction, direction)
+              case default
+                call IO_error(130_pI16, 'unknown non-Schmid model (expected G or K)', model_ns, emph=[2])
+            end select
           end if
 
         case ('hP')
