@@ -235,6 +235,7 @@ end module DAMASK_interface
 #include "../phase_mechanical_plastic_kinehardening.f90"
 #include "../phase_mechanical_plastic_dislotwin.f90"
 #include "../phase_mechanical_plastic_dislotungsten.f90"
+#include "../phase_mechanical_plastic_dislotungsten_nohardening.f90"
 #include "../phase_mechanical_plastic_nonlocal.f90"
 #include "../phase_mechanical_eigen.f90"
 #include "../phase_mechanical_eigen_thermalexpansion.f90"
